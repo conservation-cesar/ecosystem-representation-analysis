@@ -13,22 +13,22 @@
 
 # Loading data functions --------------------------------------------------
 
-
+#https://data-donnees.az.ec.gc.ca/api/file?path=/species%2Fprotectrestore%2Fcanadian-protected-conserved-areas-database%2FDatabases%2FProtectedConservedArea_2023.gdb.zip
 get_cpcad_bc_data <- function() {
-  f <- "CPCAD-BDCAPC_Dec2020.gdb.zip"
+  f <- "ProtectedConservedArea_2023.gdb.zip"
   ff <- file.path("data", str_remove(f, ".zip"))
   if(!dir.exists(ff)){
-    download.file(file.path("https://cws-scf.ca", f), destfile = f)
+    download.file(file.path("https://data-donnees.az.ec.gc.ca/api/file?path=/", f), destfile = f)
     unzip(f, exdir = "data")
     unlink(f)
   }
 
-  pa <- st_read(ff, layer = "CPCAD_Dec2020") %>%
+  pa <- st_read(ff, layer = "ProtectedConservedArea_2023") %>%
     rename_all(tolower) %>%
-    dplyr::filter(str_detect(loc_e, "British Columbia")) %>%
-    dplyr::filter(!(aichi_t11 == "No" & oecm == "No")) %>%
+    dplyr::filter(str_detect(loc, "British Columbia")) %>%
+   # dplyr::filter(!(aichi_t11 == "No" & oecm == "No")) %>%
     dplyr::filter(biome == "T") %>%
-    mutate(pa_type = ifelse(oecm == "No", "ppa", "oecm")) %>%
+   # mutate(pa_type = ifelse(oecm == "No", "ppa", "oecm")) %>%
     st_make_valid() %>%
     st_transform(st_crs(3005)) %>%
     mutate(area_all = as.numeric(st_area(.))) %>%
@@ -99,8 +99,8 @@ clean_up_dates <- function(data, input1, input2, output){
                        name_e == "Sea To Sky Wildland Zones" ~ 2011L),
       iucn_cat = factor(iucn_cat, levels = c("Ia", "Ib", "II", "III", "IV",
                                              "V", "VI", "Yes", "N/A")),
-      name_e = str_replace(name_e, "Widllife", "Wildlife"),
-      park_type = if_else(oecm == "Yes", "OECM", "PPA")) %>%
+      name_e = str_replace(name_e, "Widllife", "Wildlife")) %>%
+      #type_e = if_else(oecm == "Yes", "OECM", "PPA"))
     arrange(desc(oecm), iucn_cat, date, area_all) %>%
     st_cast() %>%
     st_cast(to="POLYGON", warn = FALSE)
@@ -140,7 +140,7 @@ clip_to_bc_boundary <- function(data, simplify = FALSE){# Clip BEC to BC outline
               "-clip data/bc.geojson remove-slivers ",
               "-o ", outfile))
 
-  if (simplify) {
+  if (simplify==TRUE) {
     outfile <- "data/bec_clipped_simp.geojson"
     system(glue("mapshaper-xl data/bec_clipped.geojson ",
                 "-simplify 50% keep-shapes ",
@@ -363,8 +363,8 @@ protected_area_by_eco <- function(data, eco_totals){
            total_area = set_units(total_area, km^2)) %>%
     st_set_geometry(NULL) %>%
     group_by(ecoregion_code, ecoregion_name, type, date) %>%
-    complete(park_type = c("OECM", "PPA"),
-             fill = list(total_area = 0)) %>%
+    # complete(type_e = c("OECM", "PPA"),
+    #          fill = list(total_area = 0)) %>%
     ungroup() %>%
     # Add placeholder for missing dates for plots (max year plus 1)
     mutate(d_max = max(date, na.rm = TRUE),
@@ -372,13 +372,13 @@ protected_area_by_eco <- function(data, eco_totals){
            date = if_else(is.na(date), d_max + 1L, date)) %>%
     group_by(ecoregion_code) %>%
     mutate(d_max = max(c(date, d_max))) %>%
-    group_by(ecoregion_code, ecoregion_name, park_type, type) %>%
+    group_by(ecoregion_code, ecoregion_name, type_e, type) %>%
     # Fill in missing dates all the way to max
     complete(date = seq(min(date, na.rm = TRUE), d_max[1]),
              fill = list(total_area = 0, missing = FALSE)) %>%
-    group_by(ecoregion_code, ecoregion_name, park_type, type, missing, date) %>%
+    group_by(ecoregion_code, ecoregion_name, type_e, type, missing, date) %>%
     summarize(total_area = as.numeric(sum(total_area)), .groups = "drop") %>%
-    group_by(ecoregion_code, ecoregion_name, park_type, type) %>%
+    group_by(ecoregion_code, ecoregion_name, type_e, type) %>%
     arrange(date, .by_group = TRUE) %>%
     mutate(cum_type = cumsum(total_area),
            total_type = sum(total_area)) %>%
@@ -386,10 +386,10 @@ protected_area_by_eco <- function(data, eco_totals){
     left_join(eco_totals, by = c("ecoregion_code", "ecoregion_name" ,"type")) %>%
     # Get regional values
     group_by(ecoregion_code, type) %>%
-    mutate(both_park_type_sum = sum(total_area),
+    mutate(both_type_e_sum = sum(total_area),
            p_type = total_type / total_ecoregion_by_type * 100,
            cum_year_type = cum_type / total_ecoregion_by_type * 100,
-           p_region = both_park_type_sum/total_ecoregion_by_type * 100) %>%
+           p_region = both_type_e_sum/total_ecoregion_by_type * 100) %>%
     ungroup() %>%
     arrange(desc(type), p_type) %>%
     mutate(ecoregion_name = factor(ecoregion_name, levels = unique(ecoregion_name)))
@@ -455,7 +455,7 @@ eco_rep_layer_mod <- function(layer, sliver_threshold, conserved_threshold){
 
 plot_by_bec_zone <- function(data){
   bar1 <- ggplot(data,
-                 aes(x = perc_type_zone, y = zone_name, fill = zone, alpha = park_type)) +
+                 aes(x = perc_type_zone, y = zone_name, fill = zone, alpha = type_e)) +
     theme_minimal(base_size = 14) +
     theme(panel.grid.major.y = element_blank(),
           legend.position = c(0.7, 0.3)) +
@@ -472,7 +472,7 @@ plot_by_bec_zone <- function(data){
 plot_bec_zone_totals<- function(data, data2){
 
   bec_totals <- data %>%
-    dplyr::filter(park_type == "PPA") %>%
+    dplyr::filter(type_e == "PPA") %>%
     mutate(total_bc = bcmaps::bc_area()) %>%
     mutate(bec_rep = total/total_bc) %>%
     select(zone, zone_name, perc_zone, total, total_bc, bec_rep) %>%
@@ -543,7 +543,7 @@ bc_map <- function(data){
                           c("Land - OECM", "Land - PPA",
                             "Water - OECM", "Water - PPA"))
   output <- data %>%
-    mutate(type_combo = glue("{tools::toTitleCase(type)} - {park_type}"),
+    mutate(type_combo = glue("{tools::toTitleCase(type)} - {type_e}"),
            type_combo = factor(type_combo,
                                levels = c("Land - OECM", "Land - PPA",
                                           "Water - OECM", "Water - PPA"))) %>%
@@ -571,7 +571,7 @@ bc_map <- function(data){
 eco_static <- function(data, input){
 
   input <- input %>%
-    dplyr::filter(park_type == "PPA") %>%
+    dplyr::filter(type_e == "PPA") %>%
     group_by(ecoregion_name, ecoregion_code, type) %>%
     dplyr::filter(date == 2020) %>%
     select(ecoregion_name, ecoregion_code, type, p_region)
@@ -618,11 +618,11 @@ eco_static <- function(data, input){
 eco_bar <- function(data){
 
   data <- data %>%
-    group_by(ecoregion_name, ecoregion_code, type, park_type) %>%
+    group_by(ecoregion_name, ecoregion_code, type, type_e) %>%
     dplyr::filter(date == 2020) %>%
-    select(ecoregion_name, ecoregion_code, type, park_type, p_type, p_region) %>%
+    select(ecoregion_name, ecoregion_code, type, type_e, p_type, p_region) %>%
     arrange(desc(p_type)) %>%
-    mutate(type_combo = glue("{tools::toTitleCase(type)} - {park_type}"),
+    mutate(type_combo = glue("{tools::toTitleCase(type)} - {type_e}"),
            type_combo = factor(type_combo,
                                levels = c("Land - OECM", "Land - PPA",
                                           "Water - OECM", "Water - PPA")),
@@ -639,7 +639,7 @@ eco_bar <- function(data){
 
   land <- ggplot(data=dplyr::filter(data, type=="land"),
                  aes(x = round(p_type,2), y = fct_reorder(ecoregion_name, p_region, .desc=FALSE),
-                     fill = type, alpha = park_type)) +
+                     fill = type, alpha = type_e)) +
     theme_minimal(base_size = 14) +
     theme(panel.grid.major.y = element_blank(),
           legend.position = c(0.7, 0.3)) +
@@ -654,7 +654,7 @@ eco_bar <- function(data){
 
   water <-ggplot(data=dplyr::filter(data, type=="water"),
                  aes(x = round(p_type,2), y = fct_reorder(ecoregion_name, p_region, .desc=FALSE),
-                     fill = type, alpha = park_type)) +
+                     fill = type, alpha = type_e)) +
     theme_minimal(base_size = 14) +
     theme(panel.grid.major.y = element_blank(),
           legend.position = c(0.7, 0.5)) +

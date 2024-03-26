@@ -17,7 +17,7 @@ rare_variants <- filter(pa_bec_summary_wide,
                         percent_comp_prov < quantile(percent_comp_prov, .05))
 
 scenario_output<-prov_eco_bec_summary_sf %>%
-  filter(percent_conserved_total < 17,
+  filter(percent_conserved_total < 30,
          (percent_comp_ecoregion > 1.25 | bgc_label %in% rare_variants$bec_variant)) %>%
   st_make_valid()
 
