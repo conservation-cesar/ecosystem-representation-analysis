@@ -25,10 +25,12 @@ get_cpcad_bc_data <- function() {
 
   pa <- st_read(ff, layer = "ProtectedConservedArea_2023") %>%
     rename_all(tolower) %>%
-    dplyr::filter(str_detect(loc, "British Columbia")) %>%
+    dplyr::filter(str_detect(owner_e, "British Columbia")) %>%
    # dplyr::filter(!(aichi_t11 == "No" & oecm == "No")) %>%
+    mutate(oecm=if_else(pa_oecm_df=="5","2","1")) %>%
+    mutate(oecm=if_else(oecm==2,"Yes","No")) %>%
     dplyr::filter(biome == "T") %>%
-   # mutate(pa_type = ifelse(oecm == "No", "ppa", "oecm")) %>%
+   mutate(pa_type = ifelse(oecm == "No", "ppa", "oecm")) %>%
     st_make_valid() %>%
     st_transform(st_crs(3005)) %>%
     mutate(area_all = as.numeric(st_area(.))) %>%
@@ -97,11 +99,11 @@ clean_up_dates <- function(data, input1, input2, output){
                        name_e == "Swan Lake Wildlife Management Area" ~ 2018L,
                        name_e == "Mctaggart-Cowan/Nsek'Iniw'T Wildlife Management Area" ~ 2013L,
                        name_e == "Sea To Sky Wildland Zones" ~ 2011L),
-      iucn_cat = factor(iucn_cat, levels = c("Ia", "Ib", "II", "III", "IV",
-                                             "V", "VI", "Yes", "N/A")),
-      name_e = str_replace(name_e, "Widllife", "Wildlife")) %>%
-      #type_e = if_else(oecm == "Yes", "OECM", "PPA"))
-    arrange(desc(oecm), iucn_cat, date, area_all) %>%
+      # iucn_cat = factor(iucn_cat, levels = c("Ia", "Ib", "II", "III", "IV",
+      #                                        "V", "VI", "Yes", "N/A")),
+      name_e = str_replace(name_e, "Widllife", "Wildlife"),
+      type_e = if_else(oecm == "Yes", "OECM", "PPA")) %>%
+   arrange(desc(oecm), date, area_all) %>% #, iucn_cat
     st_cast() %>%
     st_cast(to="POLYGON", warn = FALSE)
   output
@@ -113,10 +115,11 @@ remove_overlaps <- function(data, sample = NULL ){
     data <- data[rows, ]
   }
   output <- data %>%
-    mutate(area_single = as.numeric(st_area(.)), # Calculate indiv area
-           iucn_cat = factor(iucn_cat, levels = c("Ia", "Ib", "II", "III", "IV",
-                                                  "V", "VI", "Yes", "N/A"))) %>%
-    arrange(desc(oecm), iucn_cat, desc(area_single)) %>%
+    mutate(area_single = as.numeric(st_area(.)),
+           oecm=if_else(pa_oecm_df=="5","2","1")) %>% #, # Calculate indiv area
+   #         iucn_cat = factor(iucn_cat, levels = c("Ia", "Ib", "II", "III", "IV",
+   #                                                "V", "VI", "Yes", "N/A"))) %>%
+   arrange(desc(oecm),  desc(area_single)) %>% #iucn_cat,
     st_cast() %>%
     st_cast(to="POLYGON", warn = FALSE) %>%
     st_make_valid() %>%
@@ -132,19 +135,32 @@ remove_overlaps <- function(data, sample = NULL ){
 
 clip_to_bc_boundary <- function(data, simplify = FALSE){# Clip BEC to BC outline ---
   bc <- bc_bound_hres(ask = FALSE)
-  geojson_write(data, file = "data/bec.geojson")
-  geojson_write(bc, file = "data/bc.geojson")
+ write_sf(data, dsn = "data/bec.shp")
+ write_sf(bc, dsn = "data/bc.shp")
 
-  outfile <- "data/bec_clipped.geojson"
-  system(glue("mapshaper-xl data/bec.geojson ",
-              "-clip data/bc.geojson remove-slivers ",
-              "-o ", outfile))
+   # geojson_write(data, file = "data/bec.geojson")
+  # geojson_write(bc, file = "data/bc.geojson")
+
+  outfile <- "data/bec_clipped.shp"
+  st_intersection(st_read("data/bec.shp"),
+                          st_read("data/bc.shp")) %>% write_sf(outfile)
+
+
+  #old approach using mapshaper
+  # system(glue("mapshaper-xl data/bec.geojson ",
+  #             "-clip data/bc.geojson remove-slivers ",
+  #             "-o ", outfile))
 
   if (simplify==TRUE) {
-    outfile <- "data/bec_clipped_simp.geojson"
-    system(glue("mapshaper-xl data/bec_clipped.geojson ",
-                "-simplify 50% keep-shapes ",
-                "-o ", outfile))
+    outfile <- "data/bec_clipped_simp.shp"
+
+    st_intersection(st_read("data/bec_clipped.shp"),
+                    st_read("data/bc.shp")) %>% st_simplify(preserveTopology = T) %>%
+      write_sf(outfile)
+
+    # system(glue("mapshaper-xl data/bec_clipped.geojson ",
+    #             "-simplify 50% keep-shapes ",
+    #             "-o ", outfile))
   }
 
   output <- st_read(outfile, crs=3005)%>% # geojson doesn't have CRS so have to remind R that CRS is BC Albers
@@ -318,7 +334,8 @@ simplify_ecoregions<- function(data){# Simplify ecoregions for plotting  ---
 #' @export
 simplify_background_map <- function(data, keep = 0.05, agg = NULL, ...){# Simplify bec zones for plotting  ---
 
-  output <- rmapshaper::ms_simplify(data, keep = keep, keep_shapes = TRUE, explode = TRUE, sys = TRUE) %>%
+  output <- #rmapshaper::ms_simplify(data, keep = keep, keep_shapes = TRUE, explode = TRUE, sys = T) %>%
+    st_simplify(data,preserveTopology = T,dTolerance = keep) %>%
     st_make_valid() %>%
     st_collection_extract("POLYGON")
 
@@ -363,8 +380,8 @@ protected_area_by_eco <- function(data, eco_totals){
            total_area = set_units(total_area, km^2)) %>%
     st_set_geometry(NULL) %>%
     group_by(ecoregion_code, ecoregion_name, type, date) %>%
-    # complete(type_e = c("OECM", "PPA"),
-    #          fill = list(total_area = 0)) %>%
+    complete(type_e = c("OECM", "PPA"),
+              fill = list(total_area = 0)) %>%
     ungroup() %>%
     # Add placeholder for missing dates for plots (max year plus 1)
     mutate(d_max = max(date, na.rm = TRUE),
@@ -539,14 +556,14 @@ bc_map <- function(data){
 
   scale_land <- c("OECM" = "#74c476", "PPA" = "#006d2c")
   scale_water <- c("OECM" = "#43a2ca", "PPA" = "#0868ac")
-  scale_combo <- setNames(c(scale_land, scale_water),
-                          c("Land - OECM", "Land - PPA",
-                            "Water - OECM", "Water - PPA"))
+   scale_combo <- setNames(c(scale_land, scale_water),
+                           c("Land - OECM", "Land - PPA",
+                             "Water - OECM", "Water - PPA"))
   output <- data %>%
     mutate(type_combo = glue("{tools::toTitleCase(type)} - {type_e}"),
-           type_combo = factor(type_combo,
-                               levels = c("Land - OECM", "Land - PPA",
-                                          "Water - OECM", "Water - PPA"))) %>%
+            type_combo = factor(type_combo,
+                                levels = c("Land - OECM", "Land - PPA",
+                                           "Water - OECM", "Water - PPA"))) %>%
     group_by(date, type) %>%
     ungroup()
 
@@ -557,7 +574,7 @@ bc_map <- function(data){
     geom_sf(data = bc_bound_hres(), aes(fill=NA))+
     geom_sf(data=ld_cities)+
     geom_text(data=ld_cities, aes(x=longitude, y=latitude, label=NAME))+
-    scale_fill_manual(values = scale_combo) +
+    #scale_fill_manual(values = scale_combo) +
     scale_x_continuous(expand = c(0,0)) +
     scale_y_continuous(expand = c(0,0)) +
     labs(title = "Distribution of Conserved Areas in B.C.") +
@@ -623,9 +640,9 @@ eco_bar <- function(data){
     select(ecoregion_name, ecoregion_code, type, type_e, p_type, p_region) %>%
     arrange(desc(p_type)) %>%
     mutate(type_combo = glue("{tools::toTitleCase(type)} - {type_e}"),
-           type_combo = factor(type_combo,
-                               levels = c("Land - OECM", "Land - PPA",
-                                          "Water - OECM", "Water - PPA")),
+           type_combo = factor(type_combo),
+                                levels = c("Land - OECM", "Land - PPA",
+                                           "Water - OECM", "Water - PPA"),
            ecoregion_type_combo = glue("{ecoregion_name} - {tools::toTitleCase(type)}"),
            ecoregion_name = as.factor(ecoregion_name)) %>%
     ungroup()
@@ -634,8 +651,8 @@ eco_bar <- function(data){
   scale_water <- c("OECM" = "#8bc3d5", "PPA" = "#063c4e")
   scale_map <- c("land" = "#056100", "water" = "#0a7bd1")
   scale_combo <- setNames(c(scale_land, scale_water),
-                          c("Land - OECM", "Land - PPA",
-                            "Water - OECM", "Water - PPA"))
+                           c("Land - OECM", "Land - PPA",
+                             "Water - OECM", "Water - PPA"))
 
   land <- ggplot(data=dplyr::filter(data, type=="land"),
                  aes(x = round(p_type,2), y = fct_reorder(ecoregion_name, p_region, .desc=FALSE),

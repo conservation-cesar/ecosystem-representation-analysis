@@ -44,12 +44,12 @@ intersect_data <- list(
 
 # simplify spatial data  --------------------------------------------------
 simplify_data <- list(
-  tar_target(map_eco_background, simplify_background_map(clipped_eco, agg = c("ecoregion_code", "ecoregion_name"))),
+  tar_target(map_eco_background, simplify_background_map(clipped_eco, agg = c("ecrgn_c", "ecrgn_n"))),
   tar_target(map_bec_background, simplify_background_map(clipped_bec, agg = c("zone", "subzone", "variant"))),
   # Redo intersection rather than simplify eco_bec otherwise slivers are simplified into oblivion and makes
   # lots of empty geometries and invalid topologies
   tar_target(map_eco_bec_background, intersect_pa(map_eco_background, map_bec_background) %>%
-    group_by(ecoregion_name, ecoregion_code, zone, subzone, variant) %>%
+    group_by(ecrgn_n, ecrgn_c, zone, subzone, variant) %>%
     summarise()),
   # Just use rmapshaper::ms_simplify due to bug in sf: https://github.com/r-spatial/sf/issues/1767
   tar_target(map_pa_background, rmapshaper::ms_simplify(clean_pa, keep = 0.05, keep_shapes = TRUE, sys = TRUE) %>%
@@ -65,10 +65,10 @@ summarise_data <- list(
                mutate(area = st_area(.),
                       area = as.numeric(set_units(area, ha))) %>%
                st_drop_geometry() %>%
-               group_by(ecoregion_name, ecoregion_code, zone, subzone, variant, bgc_label) %>%
+               group_by(ecrgn_n, ecrgn_c, zone, subzone, variant, bgc_label) %>%
                summarise(bec_eco_area = sum(area), .groups = "drop") %>%
                mutate(percent_comp_prov = bec_eco_area / sum(bec_eco_area) * 100) %>%
-               group_by(ecoregion_code) %>%
+               group_by(ecrgn_c) %>%
                mutate(percent_comp_ecoregion = bec_eco_area / sum(bec_eco_area) * 100)
              ),
   tar_target(pa_eco_bec_summary,
@@ -78,13 +78,13 @@ summarise_data <- list(
                    mutate(conserved_area = st_area(.),
                           conserved_area = as.numeric(set_units(conserved_area, ha)))%>%
                    st_drop_geometry() %>%
-                   group_by(ecoregion_name, ecoregion_code, zone, subzone, variant, pa_type) %>%
+                   group_by(ecrgn_n, ecrgn_c, zone, subzone, variant, pa_type) %>%
                    summarise(conserved_area = sum(conserved_area), .groups = "drop"),
-                 by = c("ecoregion_name", "ecoregion_code", "zone", "subzone", "variant")
+                 by = c("ecrgn_n", "ecrgn_c", "zone", "subzone", "variant")
                ) %>%
-               complete(nesting(ecoregion_code, ecoregion_name, zone, subzone, variant),
+               complete(nesting(ecrgn_c, ecrgn_n, zone, subzone, variant),
                         pa_type = c("ppa", "oecm"), fill = list(conserved_area = 0)) %>%
-               group_by(ecoregion_code, zone, subzone, variant) %>%
+               group_by(ecrgn_c, zone, subzone, variant) %>%
                fill(bec_eco_area, percent_comp_prov, percent_comp_ecoregion, .direction = "downup") %>%
                ungroup() %>%
                dplyr::filter(!is.na(pa_type)) %>%
@@ -110,7 +110,7 @@ summarise_data <- list(
   tar_target(pa_eco_summary_wide,
              pa_eco_bec_summary_wide %>%
                select(-percent_comp_ecoregion, eco_area = bec_eco_area) %>%
-               group_by(ecoregion_code, ecoregion_name) %>%
+               group_by(ecrgn_c, ecrgn_n) %>%
                summarise(across(where(is.numeric), .fns = sum, na.rm = TRUE), .groups = "drop") %>%
                mutate(percent_conserved_total = total_conserved / eco_area * 100,
                       percent_conserved_ppa = ppa / eco_area * 100,

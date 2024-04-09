@@ -20,3 +20,4 @@ eco_rep_report_files
 biod_bc
 eco_rep_report.tex
 eco_rep_report.pdf
+*.geojson
